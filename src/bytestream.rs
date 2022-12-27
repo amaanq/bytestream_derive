@@ -63,7 +63,7 @@ pub fn imp(item: &DeriveInput) -> Result<TokenStream> {
             let (repr_write, _) = match repr_ty.to_string().as_str() {
                 "u8" => (quote!(write_byte), quote!(read_byte)),
                 "u16" => (quote!(write_u16), quote!(read_u16)),
-                "u32" => (quote!(write_uint), quote!(read_uint)),
+                "u32" => (quote!(write_int), quote!(read_int)),
                 "u64" => (quote!(write_u64), quote!(read_u64)),
                 _ => Err(Error::new(
                     repr_attr.tokens.span(),
@@ -93,7 +93,7 @@ pub fn imp(item: &DeriveInput) -> Result<TokenStream> {
                 let fields_print = print_fields(&variant.fields);
 
                 write_vars.push(quote!(#item_name::#var_name #fields_pat => {
-                    bytestream.#repr_write(#discrim);
+                    encoder.#repr_write(#discrim);
                     #fields_write
                 }));
                 read_vars.push(quote!(#discrim => #item_name::#var_name #fields_read));
@@ -102,7 +102,7 @@ pub fn imp(item: &DeriveInput) -> Result<TokenStream> {
                 }));
             }
 
-            let writer = quote! {{
+            let encoder = quote! {{
                 match self {
                     #(#write_vars),*
                 }
@@ -110,8 +110,8 @@ pub fn imp(item: &DeriveInput) -> Result<TokenStream> {
 
             let read_repr = quote!(#repr_ty);
 
-            let reader = quote! {{
-                let id: #read_repr = ::titan::ByteStreamIo::decode(bytestream)?;
+            let decoder = quote! {{
+                let id: #read_repr = ::titan::ByteStreamIo::decode(stream)?;
                 match id {
                     #(#read_vars,)*
                     _ => {
@@ -120,12 +120,12 @@ pub fn imp(item: &DeriveInput) -> Result<TokenStream> {
                     }
                 }
             }};
-            let printer = quote! {{
+            let output = quote! {{
                 match self {
                     #(#print_vars),*
                 }
             }};
-            (writer, reader, printer)
+            (encoder, decoder, output)
         }
         // Data::Union(_) => Err(Error::new(item.span(), "Unions cannot be derived as Packet"))?,
         Data::Union(_) => panic!("Unions cannot be derived as Packet"),
@@ -134,12 +134,11 @@ pub fn imp(item: &DeriveInput) -> Result<TokenStream> {
     let ret = quote! {
         #[automatically_derived]
         impl ::titan::ByteStreamIo for #item_name {
-            fn encode(&self, bytestream: &mut ::titan::ByteStream) {
+            fn encode(&self, encoder: &mut dyn ::titan::ChecksumEncoder) {
                 #encoder
-
             }
 
-            fn decode(bytestream: &mut ::titan::ByteStream) -> ::titan::ByteStreamResult<Self> {
+            fn decode(stream: &mut ::titan::ByteStream) -> ::titan::ByteStreamResult<Self> {
                 Ok(#decoder)
             }
         }
@@ -302,15 +301,15 @@ fn pat_fields(fields: &Fields) -> TokenStream {
 
 fn write_field(_ty: &Type, expr: &TokenStream) -> TokenStream {
     quote! {{
-        use ::titan::ByteStreamIo;
-        (#expr).encode(bytestream);
+        use ::titan::ChecksumEncoder;
+        (#expr).encode(encoder);
     }}
 }
 
 fn read_field(ty: &Type) -> TokenStream {
     quote! {
         {
-            let var: #ty = ::titan::ByteStreamIo::decode(bytestream)?;
+            let var: #ty = ::titan::ByteStreamIo::decode(stream)?;
             var
         }
     }
